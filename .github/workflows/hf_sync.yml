@@ -15,5 +15,5 @@ jobs:
           lfs: true
       - name: Push to hub
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: git push --force https://rcpaffenroth:$HF_TOKEN@huggingface.co/spaces/rcpaffenroth/CSDS553_Demo HEAD:main
+          HF_TOKEN: ${{ secrets.WRITE_TOKEN }}
+        run: git push --force https://pradyten:$HF_TOKEN@huggingface.co/spaces/pradyten/Resume-Comparator HEAD:main
