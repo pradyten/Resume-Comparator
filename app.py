@@ -277,48 +277,47 @@ def extract_top_keywords(text: str, top_n: int = 15) -> str:
 # --------------------------
 # Main Gradio app logic
 # --------------------------
-def analyze_resume(file, job_description: str, mode: str):
-    if file is None or not job_description.strip():
-        return 0.0, "Please upload a resume and paste a job description.", "", "", "", "", "", "", ""
+def analyze_resumes(files, job_description: str, mode: str):
+    if not files or not job_description.strip():
+        return 0.0, "Please upload resumes and paste a job description.", "", "", "", "", "", "", "", ""
 
-    try:
-        resume_text, fname = extract_text_from_fileobj(file)
-        if resume_text.strip().startswith("[Error"):
-            raise RuntimeError(resume_text)
+    results = []
+    for file in files:
+        try:
+            resume_text, fname = extract_text_from_fileobj(file)
+            if resume_text.strip().startswith("[Error"):
+                continue  # Skip errored files
+            cleaned_resume = preprocess_text(resume_text)
+            cleaned_job = preprocess_text(job_description)
+            sim_pct = calculate_similarity(cleaned_resume, cleaned_job, mode=mode)
+            results.append((sim_pct, resume_text, fname))
+        except Exception:
+            continue  # Skip if any error
 
-        cleaned_resume = preprocess_text(resume_text)
-        cleaned_job = preprocess_text(job_description)
+    if not results:
+        return 0.0, "No valid resumes were provided.", "", "", "", "", "", "", "", ""
 
-        sim_pct = calculate_similarity(cleaned_resume, cleaned_job, mode=mode)
+    # Select the best matching resume
+    best = max(results, key=lambda x: x[0])  # highest similarity
+    sim_pct, resume_text, fname = best
 
-        if sim_pct >= 80:
-            verdict = f"<h3 style='color:green;'>✅ Excellent Match ({sim_pct:.2f}%)</h3>"
-        elif sim_pct >= 60:
-            verdict = f"<h3 style='color:limegreen;'>👍 Good Match ({sim_pct:.2f}%)</h3>"
-        elif sim_pct >= 40:
-            verdict = f"<h3 style='color:orange;'>⚠️ Fair Match ({sim_pct:.2f}%)</h3>"
-        else:
-            verdict = f"<h3 style='color:red;'>❌ Low Match ({sim_pct:.2f}%)</h3>"
+    missing_dict, suggestions_text = analyze_resume_keywords(resume_text, job_description)
+    missing_formatted = format_missing_keywords(missing_dict)
+    job_suggestions = suggest_jobs(resume_text)
+    projects_section = extract_projects_section(resume_text)
+    project_fit_verdict = analyze_projects_fit(projects_section, job_description, mode)
+    resume_keywords_text = extract_top_keywords(preprocess_text(resume_text))
+    jd_keywords_text = extract_top_keywords(preprocess_text(job_description))
 
-        missing_dict, suggestions_text = analyze_resume_keywords(resume_text, job_description)
+    verdict = f"<h3 style='color:green;'>✅ Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 80 else \
+        f"<h3 style='color:limegreen;'>👍 Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 60 else \
+        f"<h3 style='color:orange;'>⚠️ Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 40 else \
+        f"<h3 style='color:red;'>❌ Low Match: {fname} ({sim_pct:.2f}%)</h3>"
 
-        missing_formatted = format_missing_keywords(missing_dict)
-        job_suggestions = suggest_jobs(resume_text)
-
-        projects_section = extract_projects_section(resume_text)
-        project_fit_verdict = analyze_projects_fit(projects_section, job_description, mode)
-
-        resume_keywords_text = extract_top_keywords(cleaned_resume)
-        jd_keywords_text = extract_top_keywords(cleaned_job)
-
-        return (
-            float(sim_pct), verdict, missing_formatted, suggestions_text,
-            job_suggestions, projects_section, project_fit_verdict, resume_keywords_text, jd_keywords_text
-        )
-
-    except Exception as e:
-        tb = traceback.format_exc()
-        return 0.0, f"### An Error Occurred\n`{e}`", "", "", "", "", "", "", ""
+    return (
+        float(sim_pct), verdict, missing_formatted, suggestions_text,
+        job_suggestions, projects_section, project_fit_verdict, resume_keywords_text, jd_keywords_text, fname
+    )
 
 
 # --------------------------
@@ -339,8 +338,8 @@ def build_ui():
 
         with gr.Row():
             with gr.Column(scale=2):
-                file_in = gr.File(label="Upload resume (PDF or DOCX)", file_count="single",
-                                  file_types=[".pdf", ".docx"])
+                file_in = gr.File(label="Upload resumes (PDF or DOCX)", file_count="multiple",
+                  file_types=[".pdf", ".docx"])
                 job_desc = gr.Textbox(lines=10, label="Job Description",
                                       placeholder="Paste the full job description here...")
                 mode = gr.Radio(choices=["sbert", "bert"], value="sbert", label="Analysis Mode",
@@ -371,11 +370,10 @@ def build_ui():
                         jd_keywords_out = gr.Textbox(label="Top Job Description Keywords")
 
         run_btn.click(
-            analyze_resume,
+            analyze_resumes,
             inputs=[file_in, job_desc, mode],
             outputs=[score_slider, score_text, missing_out, suggestions_out, job_suggestions_out, projects_out,
-                     project_fit_out, resume_keywords_out,
-                     jd_keywords_out],
+                    project_fit_out, resume_keywords_out, jd_keywords_out, gr.Textbox(label="Best Match Filename")],
             show_progress='full'
         )
 
