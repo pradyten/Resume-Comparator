@@ -5,7 +5,7 @@ import tempfile
 import traceback
 from typing import Tuple, Dict
 
-import fitz  # PyMuPD
+import fitz  # PyMuPDF
 import docx  # python-docx
 
 import numpy as np
