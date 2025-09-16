@@ -13,7 +13,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           COMMIT_MESSAGE=$(git log -1 --pretty=%B)
-          COMMIT_URL="https://github.com/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}"
+          COMMIT_URL="https://github.com/pradyten/Resume-Comparator/commit/${GITHUB_SHA}"
           curl -X POST -H "Content-Type: application/json" \
           -d "{\"content\": \"A new commit was pushed to the main branch by $GITHUB_ACTOR.\nCommit: $GITHUB_SHA\nMessage: $COMMIT_MESSAGE\nURL: $COMMIT_URL\"}" \
           $DISCORD_WEBHOOK_URL
