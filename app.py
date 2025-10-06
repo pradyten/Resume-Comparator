@@ -398,17 +398,39 @@ import gradio as gr
 from local_model import (
     extract_text_from_fileobj,
     preprocess_text,
-    calculate_similarity,
+    calculate_similarity,          # local (sbert/bert)
     analyze_resume_keywords,
     format_missing_keywords,
     suggest_jobs,
     extract_projects_section,
-    analyze_projects_fit,
     extract_top_keywords,
 )
+from api_model import calculate_similarity_api  # API mode (HF Inference)
 
-# NEW: import API mode similarity
-from api_model import calculate_similarity_api
+
+# --------------------------
+# Helpers
+# --------------------------
+def _verdict_html(fname: str, sim_pct: float) -> str:
+    if sim_pct >= 80:
+        return f"<h3 style='color:green;'>✅ Best Match: {fname} ({sim_pct:.2f}%)</h3>"
+    if sim_pct >= 60:
+        return f"<h3 style='color:limegreen;'>👍 Best Match: {fname} ({sim_pct:.2f}%)</h3>"
+    if sim_pct >= 40:
+        return f"<h3 style='color:orange;'>⚠️ Best Match: {fname} ({sim_pct:.2f}%)</h3>"
+    return f"<h3 style='color:red;'>❌ Low Match: {fname} ({sim_pct:.2f}%)</h3>"
+
+def _project_fit_verdict_from_score(score: float) -> str:
+    if score >= 75:
+        return (f"<p style='color:green;'>✅ <b>Highly Relevant ({score:.2f}%)</b>: "
+                f"The projects listed are an excellent match for this job's requirements.</p>")
+    if score >= 50:
+        return (f"<p style='color:limegreen;'>👍 <b>Relevant ({score:.2f}%)</b>: "
+                f"The projects show relevant skills and experience for this role.</p>")
+    return (f"<p style='color:orange;'>⚠️ <b>Moderately Relevant ({score:.2f}%)</b>: "
+            f"The projects may not directly align with the key requirements. "
+            f"Consider highlighting different aspects of your work.</p>")
+
 
 # --------------------------
 # Main Gradio app logic
@@ -423,18 +445,21 @@ def analyze_resumes(files, job_description: str, mode: str):
             resume_text, fname = extract_text_from_fileobj(file)
             if resume_text.strip().startswith("[Error"):
                 continue  # Skip errored files
+
+            # Clean both sides before similarity
             cleaned_resume = preprocess_text(resume_text)
             cleaned_job = preprocess_text(job_description)
 
-            # Route by mode (SBERT/BERT local vs API)
+            # Similarity by mode
             if mode == "api":
                 sim_pct = calculate_similarity_api(cleaned_resume, cleaned_job)
-            else:
+            else:  # "sbert" or "bert" (local)
                 sim_pct = calculate_similarity(cleaned_resume, cleaned_job, mode=mode)
 
             results.append((sim_pct, resume_text, fname))
         except Exception:
-            continue  # Skip if any error
+            # Skip the file on any error (keep app resilient)
+            continue
 
     if not results:
         return 0.0, "No valid resumes were provided.", "", "", "", "", "", "", "", ""
@@ -443,34 +468,48 @@ def analyze_resumes(files, job_description: str, mode: str):
     best = max(results, key=lambda x: x[0])  # highest similarity
     sim_pct, resume_text, fname = best
 
+    # Keyword + jobs + keywords extraction (mode-independent)
     missing_dict, suggestions_text = analyze_resume_keywords(resume_text, job_description)
     missing_formatted = format_missing_keywords(missing_dict)
     job_suggestions = suggest_jobs(resume_text)
     projects_section = extract_projects_section(resume_text)
-    project_fit_verdict = analyze_projects_fit(projects_section, job_description, mode if mode != "api" else "sbert")
-    # ^ Project-fit path uses local formatting thresholds; mode value here affects only wording/thresholds,
-    #   so we map 'api' to 'sbert' for consistent messages.
+
+    # Project fit: local for sbert/bert, API for api
+    if projects_section.startswith("Could not"):
+        project_fit_verdict = "Cannot analyze project fit as no projects section was found."
+    else:
+        cleaned_projects = preprocess_text(projects_section)
+        cleaned_job = preprocess_text(job_description)
+        if cleaned_projects:
+            try:
+                if mode == "api":
+                    pscore = calculate_similarity_api(cleaned_projects, cleaned_job)
+                else:
+                    pscore = calculate_similarity(cleaned_projects, cleaned_job, mode=mode)
+                project_fit_verdict = _project_fit_verdict_from_score(pscore)
+            except Exception as _:
+                project_fit_verdict = "Could not compute project fit (embedding error)."
+        else:
+            project_fit_verdict = "Projects section is empty or contains no relevant text to analyze."
 
     resume_keywords_text = extract_top_keywords(preprocess_text(resume_text))
     jd_keywords_text = extract_top_keywords(preprocess_text(job_description))
 
-    verdict = (
-        f"<h3 style='color:green;'>✅ Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 80 else
-        f"<h3 style='color:limegreen;'>👍 Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 60 else
-        f"<h3 style='color:orange;'>⚠️ Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 40 else
-        f"<h3 style='color:red;'>❌ Low Match: {fname} ({sim_pct:.2f}%)</h3>"
-    )
+    verdict = _verdict_html(fname, sim_pct)
 
     return (
         float(sim_pct), verdict, missing_formatted, suggestions_text,
         job_suggestions, projects_section, project_fit_verdict, resume_keywords_text, jd_keywords_text, fname
     )
 
+
 # --------------------------
 # Clear Button Logic
 # --------------------------
 def clear_inputs():
+    # Reset mode to sbert; clear all outputs
     return None, "", "sbert", 0.0, "", "", "", "", "", "", ""
+
 
 # --------------------------
 # Build Gradio UI
@@ -495,11 +534,10 @@ def build_ui():
                     placeholder="Paste the full job description here..."
                 )
                 mode = gr.Radio(
-                    # ADD the 3rd option here:
                     choices=["sbert", "bert", "api"],
                     value="sbert",
                     label="Analysis Mode",
-                    info="SBERT (local, fast) • BERT (local, detailed) • API (HF Inference, no local model)"
+                    info="SBERT/BERΤ use local models; API uses Hugging Face Inference API."
                 )
                 with gr.Row():
                     clear_btn = gr.Button("Clear")
