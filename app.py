@@ -407,6 +407,9 @@ from local_model import (
     extract_top_keywords,
 )
 
+# NEW: import API mode similarity
+from api_model import calculate_similarity_api
+
 # --------------------------
 # Main Gradio app logic
 # --------------------------
@@ -422,7 +425,13 @@ def analyze_resumes(files, job_description: str, mode: str):
                 continue  # Skip errored files
             cleaned_resume = preprocess_text(resume_text)
             cleaned_job = preprocess_text(job_description)
-            sim_pct = calculate_similarity(cleaned_resume, cleaned_job, mode=mode)
+
+            # Route by mode (SBERT/BERT local vs API)
+            if mode == "api":
+                sim_pct = calculate_similarity_api(cleaned_resume, cleaned_job)
+            else:
+                sim_pct = calculate_similarity(cleaned_resume, cleaned_job, mode=mode)
+
             results.append((sim_pct, resume_text, fname))
         except Exception:
             continue  # Skip if any error
@@ -438,7 +447,10 @@ def analyze_resumes(files, job_description: str, mode: str):
     missing_formatted = format_missing_keywords(missing_dict)
     job_suggestions = suggest_jobs(resume_text)
     projects_section = extract_projects_section(resume_text)
-    project_fit_verdict = analyze_projects_fit(projects_section, job_description, mode)
+    project_fit_verdict = analyze_projects_fit(projects_section, job_description, mode if mode != "api" else "sbert")
+    # ^ Project-fit path uses local formatting thresholds; mode value here affects only wording/thresholds,
+    #   so we map 'api' to 'sbert' for consistent messages.
+
     resume_keywords_text = extract_top_keywords(preprocess_text(resume_text))
     jd_keywords_text = extract_top_keywords(preprocess_text(job_description))
 
@@ -483,10 +495,11 @@ def build_ui():
                     placeholder="Paste the full job description here..."
                 )
                 mode = gr.Radio(
-                    choices=["sbert", "bert"],
+                    # ADD the 3rd option here:
+                    choices=["sbert", "bert", "api"],
                     value="sbert",
                     label="Analysis Mode",
-                    info="SBERT is faster, BERT is more detailed."
+                    info="SBERT (local, fast) • BERT (local, detailed) • API (HF Inference, no local model)"
                 )
                 with gr.Row():
                     clear_btn = gr.Button("Clear")
