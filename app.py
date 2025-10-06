@@ -1,4 +1,4 @@
-import io
+'''import io
 import os
 import re
 import tempfile
@@ -390,4 +390,156 @@ def build_ui():
 if __name__ == "__main__":
     demo = build_ui()
     demo.launch()
-    #demo.launch(server_name="0.0.0.0")
+    #demo.launch(server_name="0.0.0.0")'''
+
+# app.py
+import gradio as gr
+
+from local_model import (
+    extract_text_from_fileobj,
+    preprocess_text,
+    calculate_similarity,
+    analyze_resume_keywords,
+    format_missing_keywords,
+    suggest_jobs,
+    extract_projects_section,
+    analyze_projects_fit,
+    extract_top_keywords,
+)
+
+# --------------------------
+# Main Gradio app logic
+# --------------------------
+def analyze_resumes(files, job_description: str, mode: str):
+    if not files or not job_description.strip():
+        return 0.0, "Please upload resumes and paste a job description.", "", "", "", "", "", "", "", ""
+
+    results = []
+    for file in files:
+        try:
+            resume_text, fname = extract_text_from_fileobj(file)
+            if resume_text.strip().startswith("[Error"):
+                continue  # Skip errored files
+            cleaned_resume = preprocess_text(resume_text)
+            cleaned_job = preprocess_text(job_description)
+            sim_pct = calculate_similarity(cleaned_resume, cleaned_job, mode=mode)
+            results.append((sim_pct, resume_text, fname))
+        except Exception:
+            continue  # Skip if any error
+
+    if not results:
+        return 0.0, "No valid resumes were provided.", "", "", "", "", "", "", "", ""
+
+    # Select the best matching resume
+    best = max(results, key=lambda x: x[0])  # highest similarity
+    sim_pct, resume_text, fname = best
+
+    missing_dict, suggestions_text = analyze_resume_keywords(resume_text, job_description)
+    missing_formatted = format_missing_keywords(missing_dict)
+    job_suggestions = suggest_jobs(resume_text)
+    projects_section = extract_projects_section(resume_text)
+    project_fit_verdict = analyze_projects_fit(projects_section, job_description, mode)
+    resume_keywords_text = extract_top_keywords(preprocess_text(resume_text))
+    jd_keywords_text = extract_top_keywords(preprocess_text(job_description))
+
+    verdict = (
+        f"<h3 style='color:green;'>✅ Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 80 else
+        f"<h3 style='color:limegreen;'>👍 Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 60 else
+        f"<h3 style='color:orange;'>⚠️ Best Match: {fname} ({sim_pct:.2f}%)</h3>" if sim_pct >= 40 else
+        f"<h3 style='color:red;'>❌ Low Match: {fname} ({sim_pct:.2f}%)</h3>"
+    )
+
+    return (
+        float(sim_pct), verdict, missing_formatted, suggestions_text,
+        job_suggestions, projects_section, project_fit_verdict, resume_keywords_text, jd_keywords_text, fname
+    )
+
+# --------------------------
+# Clear Button Logic
+# --------------------------
+def clear_inputs():
+    return None, "", "sbert", 0.0, "", "", "", "", "", "", ""
+
+# --------------------------
+# Build Gradio UI
+# --------------------------
+def build_ui():
+    with gr.Blocks(theme=gr.themes.Default(), title="Resume ↔ Job Matcher") as demo:
+        gr.Markdown("# 📄 Resume & Job Description Analyzer 🎯")
+        gr.Markdown(
+            "Upload a resume, paste a job description, and get an instant analysis, keyword suggestions, and potential job matches."
+        )
+
+        with gr.Row():
+            with gr.Column(scale=2):
+                file_in = gr.File(
+                    label="Upload resumes (PDF or DOCX)",
+                    file_count="multiple",
+                    file_types=[".pdf", ".docx"]
+                )
+                job_desc = gr.Textbox(
+                    lines=10,
+                    label="Job Description",
+                    placeholder="Paste the full job description here..."
+                )
+                mode = gr.Radio(
+                    choices=["sbert", "bert"],
+                    value="sbert",
+                    label="Analysis Mode",
+                    info="SBERT is faster, BERT is more detailed."
+                )
+                with gr.Row():
+                    clear_btn = gr.Button("Clear")
+                    run_btn = gr.Button("Analyze Resume", variant="primary")
+
+            with gr.Column(scale=3):
+                with gr.Tabs():
+                    with gr.TabItem("📊 Analysis & Suggestions"):
+                        score_slider = gr.Slider(
+                            value=0, minimum=0, maximum=100, step=0.01, interactive=False,
+                            label="Similarity Score"
+                        )
+                        score_text = gr.Markdown()
+                        suggestions_out = gr.Textbox(
+                            label="Suggestions to Improve Your Resume", interactive=False, lines=5
+                        )
+                        missing_out = gr.Markdown(label="Keywords Check")
+
+                    with gr.TabItem("🛠️ Project Analysis"):
+                        project_fit_out = gr.Markdown(label="Project Fit Verdict")
+                        projects_out = gr.Textbox(label="Extracted Projects Section", interactive=False, lines=12)
+
+                    with gr.TabItem("🚀 Job Suggestions"):
+                        job_suggestions_out = gr.Markdown(label="Potential Job Roles")
+
+                    with gr.TabItem("🔑 Top Keywords"):
+                        resume_keywords_out = gr.Textbox(label="Top Resume Keywords")
+                        jd_keywords_out = gr.Textbox(label="Top Job Description Keywords")
+
+                best_fname_out = gr.Textbox(label="Best Match Filename", interactive=False)
+
+        run_btn.click(
+            analyze_resumes,
+            inputs=[file_in, job_desc, mode],
+            outputs=[
+                score_slider, score_text, missing_out, suggestions_out, job_suggestions_out, projects_out,
+                project_fit_out, resume_keywords_out, jd_keywords_out, best_fname_out
+            ],
+            show_progress='full'
+        )
+
+        clear_btn.click(
+            clear_inputs,
+            inputs=[],
+            outputs=[
+                file_in, job_desc, mode, score_slider, score_text, missing_out, suggestions_out,
+                job_suggestions_out, projects_out, project_fit_out, resume_keywords_out, jd_keywords_out, best_fname_out
+            ]
+        )
+
+    return demo
+
+if __name__ == "__main__":
+    demo = build_ui()
+    demo.launch()
+    # demo.launch(server_name="0.0.0.0")
