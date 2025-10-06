@@ -1,4 +1,4 @@
---find-links https://storage.googleapis.com/torch-cpu/torch_stable.html
+'''--find-links https://storage.googleapis.com/torch-cpu/torch_stable.html
 torch
 torchvision
 
@@ -10,4 +10,40 @@ python-docx
 sentence-transformers
 transformers
 wordcloud
+matplotlib'''
+
+# ===== Torch CPU Wheels (for Spaces) =====
+--find-links https://storage.googleapis.com/torch-cpu/torch_stable.html
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# ===== Core Scientific Stack =====
+numpy==1.26.4          # compatible with most PyTorch CPU wheels
+scipy<1.11             # optional but stable with numpy 1.26
+
+# ===== PyTorch =====
+torch==2.2.2
+torchvision==0.17.2
+
+# ===== App / ML Libraries =====
+gradio>=4.44.1
+fastapi
+uvicorn
+pydantic>=1.10,<3
+huggingface_hub>=0.24
+scikit-learn
+sentence-transformers
+transformers
+
+# ===== PDF / Document Processing =====
+pypdf
+PyMuPDF
+python-docx
+
+# ===== Visualization & Word Analysis =====
+wordcloud
 matplotlib
+
+# ===== (Optional utilities if needed) =====
+# If you use caching / async inference, you can also add:
+# aiohttp
+# tqdm
