@@ -405,12 +405,8 @@ from local_model import (
     extract_projects_section,
     extract_top_keywords,
 )
-from api_model import calculate_similarity_api  # API mode (HF Inference)
+from api_model import calculate_similarity_api, check_api_health  # API mode (HF Inference)
 
-
-# --------------------------
-# Helpers
-# --------------------------
 def _verdict_html(fname: str, sim_pct: float) -> str:
     if sim_pct >= 80:
         return f"<h3 style='color:green;'>✅ Best Match: {fname} ({sim_pct:.2f}%)</h3>"
@@ -431,55 +427,67 @@ def _project_fit_verdict_from_score(score: float) -> str:
             f"The projects may not directly align with the key requirements. "
             f"Consider highlighting different aspects of your work.</p>")
 
-
-# --------------------------
-# Main Gradio app logic
-# --------------------------
 def analyze_resumes(files, job_description: str, mode: str):
     if not files or not job_description.strip():
         return 0.0, "Please upload resumes and paste a job description.", "", "", "", "", "", "", "", ""
 
+    # Fast fail if API mode is selected but HF token/model is not ready
+    if mode == "api":
+        ok, msg = check_api_health()
+        if not ok:
+            return (0.0,
+                    f"<p style='color:red;'>HF Inference API error: {msg}</p>",
+                    "", "", "", "", "", "", "", "")
+
     results = []
+    first_error = None
+
     for file in files:
         try:
             resume_text, fname = extract_text_from_fileobj(file)
             if resume_text.strip().startswith("[Error"):
-                continue  # Skip errored files
+                # file read failure — skip file but note error
+                first_error = first_error or resume_text
+                continue
 
-            # Clean both sides before similarity
             cleaned_resume = preprocess_text(resume_text)
-            cleaned_job = preprocess_text(job_description)
+            cleaned_job    = preprocess_text(job_description)
 
-            # Similarity by mode
             if mode == "api":
                 sim_pct = calculate_similarity_api(cleaned_resume, cleaned_job)
-            else:  # "sbert" or "bert" (local)
+            else:
                 sim_pct = calculate_similarity(cleaned_resume, cleaned_job, mode=mode)
 
             results.append((sim_pct, resume_text, fname))
-        except Exception:
-            # Skip the file on any error (keep app resilient)
+
+        except Exception as e:
+            # Capture first embedding/API error so the user gets a useful message
+            if first_error is None:
+                first_error = f"{type(e).__name__}: {e}"
             continue
 
     if not results:
-        return 0.0, "No valid resumes were provided.", "", "", "", "", "", "", "", ""
+        # If everything failed, surface the first error instead of a vague message
+        msg = first_error or "No valid resumes were provided."
+        return (0.0,
+                f"<p style='color:red;'>Analysis failed: {msg}</p>",
+                "", "", "", "", "", "", "", "")
 
-    # Select the best matching resume
-    best = max(results, key=lambda x: x[0])  # highest similarity
+    # Best match
+    best = max(results, key=lambda x: x[0])
     sim_pct, resume_text, fname = best
 
-    # Keyword + jobs + keywords extraction (mode-independent)
     missing_dict, suggestions_text = analyze_resume_keywords(resume_text, job_description)
     missing_formatted = format_missing_keywords(missing_dict)
     job_suggestions = suggest_jobs(resume_text)
     projects_section = extract_projects_section(resume_text)
 
-    # Project fit: local for sbert/bert, API for api
+    # Project fit
     if projects_section.startswith("Could not"):
         project_fit_verdict = "Cannot analyze project fit as no projects section was found."
     else:
         cleaned_projects = preprocess_text(projects_section)
-        cleaned_job = preprocess_text(job_description)
+        cleaned_job      = preprocess_text(job_description)
         if cleaned_projects:
             try:
                 if mode == "api":
@@ -487,14 +495,13 @@ def analyze_resumes(files, job_description: str, mode: str):
                 else:
                     pscore = calculate_similarity(cleaned_projects, cleaned_job, mode=mode)
                 project_fit_verdict = _project_fit_verdict_from_score(pscore)
-            except Exception as _:
-                project_fit_verdict = "Could not compute project fit (embedding error)."
+            except Exception as e:
+                project_fit_verdict = f"Could not compute project fit (embedding error: {type(e).__name__}: {e})."
         else:
             project_fit_verdict = "Projects section is empty or contains no relevant text to analyze."
 
     resume_keywords_text = extract_top_keywords(preprocess_text(resume_text))
-    jd_keywords_text = extract_top_keywords(preprocess_text(job_description))
-
+    jd_keywords_text     = extract_top_keywords(preprocess_text(job_description))
     verdict = _verdict_html(fname, sim_pct)
 
     return (
@@ -502,18 +509,12 @@ def analyze_resumes(files, job_description: str, mode: str):
         job_suggestions, projects_section, project_fit_verdict, resume_keywords_text, jd_keywords_text, fname
     )
 
-
-# --------------------------
-# Clear Button Logic
-# --------------------------
 def clear_inputs():
-    # Reset mode to sbert; clear all outputs
-    return None, "", "sbert", 0.0, "", "", "", "", "", "", ""
+    # MUST return one value per output we wire in clear_btn.click
+    # outputs: file_in, job_desc, mode, score_slider, score_text, missing_out, suggestions_out,
+    #          job_suggestions_out, projects_out, project_fit_out, resume_keywords_out, jd_keywords_out, best_fname_out
+    return (None, "", "sbert", 0.0, "", "", "", "", "", "", "", "", "")
 
-
-# --------------------------
-# Build Gradio UI
-# --------------------------
 def build_ui():
     with gr.Blocks(theme=gr.themes.Default(), title="Resume ↔ Job Matcher") as demo:
         gr.Markdown("# 📄 Resume & Job Description Analyzer 🎯")
@@ -529,15 +530,14 @@ def build_ui():
                     file_types=[".pdf", ".docx"]
                 )
                 job_desc = gr.Textbox(
-                    lines=10,
-                    label="Job Description",
+                    lines=10, label="Job Description",
                     placeholder="Paste the full job description here..."
                 )
                 mode = gr.Radio(
                     choices=["sbert", "bert", "api"],
                     value="sbert",
                     label="Analysis Mode",
-                    info="SBERT/BERΤ use local models; API uses Hugging Face Inference API."
+                    info="SBERT/BERT use local models; API uses Hugging Face Inference API."
                 )
                 with gr.Row():
                     clear_btn = gr.Button("Clear")
@@ -546,14 +546,11 @@ def build_ui():
             with gr.Column(scale=3):
                 with gr.Tabs():
                     with gr.TabItem("📊 Analysis & Suggestions"):
-                        score_slider = gr.Slider(
-                            value=0, minimum=0, maximum=100, step=0.01, interactive=False,
-                            label="Similarity Score"
-                        )
+                        score_slider = gr.Slider(value=0, minimum=0, maximum=100, step=0.01,
+                                                 interactive=False, label="Similarity Score")
                         score_text = gr.Markdown()
-                        suggestions_out = gr.Textbox(
-                            label="Suggestions to Improve Your Resume", interactive=False, lines=5
-                        )
+                        suggestions_out = gr.Textbox(label="Suggestions to Improve Your Resume",
+                                                     interactive=False, lines=5)
                         missing_out = gr.Markdown(label="Keywords Check")
 
                     with gr.TabItem("🛠️ Project Analysis"):
@@ -572,9 +569,9 @@ def build_ui():
         run_btn.click(
             analyze_resumes,
             inputs=[file_in, job_desc, mode],
-            outputs=[
-                score_slider, score_text, missing_out, suggestions_out, job_suggestions_out, projects_out,
-                project_fit_out, resume_keywords_out, jd_keywords_out, best_fname_out
+            outputs=[  # 10 outputs
+                score_slider, score_text, missing_out, suggestions_out, job_suggestions_out,
+                projects_out, project_fit_out, resume_keywords_out, jd_keywords_out, best_fname_out
             ],
             show_progress='full'
         )
@@ -582,7 +579,7 @@ def build_ui():
         clear_btn.click(
             clear_inputs,
             inputs=[],
-            outputs=[
+            outputs=[  # 13 outputs; keep in sync with clear_inputs()
                 file_in, job_desc, mode, score_slider, score_text, missing_out, suggestions_out,
                 job_suggestions_out, projects_out, project_fit_out, resume_keywords_out, jd_keywords_out, best_fname_out
             ]
