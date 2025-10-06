@@ -8,7 +8,7 @@ HF_TOKEN    = os.getenv("HF_TOKEN")                      # set in env/Space Vari
 MAX_LEN     = int(os.getenv("MAX_TEXT_LEN", "20000"))
 REQ_TIMEOUT = float(os.getenv("REQ_TIMEOUT", "40"))
 
-_hf = InferenceClient(model=EMBED_MODEL, token="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", timeout=REQ_TIMEOUT)
+_hf = InferenceClient(model=EMBED_MODEL, token=HF_TOKEN, timeout=REQ_TIMEOUT)
 
 def _trim(s: str) -> str:
     s = (s or "").strip()
